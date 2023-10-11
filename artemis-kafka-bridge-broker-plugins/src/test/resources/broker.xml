@@ -1,0 +1,59 @@
+<?xml version='1.0'?>
+<configuration xmlns="urn:activemq"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xmlns:xi="http://www.w3.org/2001/XInclude"
+               xsi:schemaLocation="urn:activemq /schema/artemis-configuration.xsd">
+
+  <core xmlns="urn:activemq:core" 
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="urn:activemq:core ">
+
+    <name>akb-test-broker</name>
+
+    <persistence-enabled>false</persistence-enabled>
+    <security-enabled>false</security-enabled>
+    
+    <acceptors>
+      <acceptor name="invm">vm://0</acceptor>
+    </acceptors>
+    
+    <addresses>
+      <address name="app.foo">
+        <anycast>
+          <queue name="app.foo"/>
+        </anycast>
+      </address>
+      <address name="app.bar">
+        <multicast/>
+      </address>
+      <address name="__akb.outbound">
+        <anycast>
+          <queue name="__akb.outbound"/>
+        </anycast>
+      </address>
+    </addresses>
+
+    <diverts>
+      <divert name="akb-divert-app.foo">
+        <address>app.foo</address>
+        <forwarding-address>__akb.outbound</forwarding-address>
+        <filter string="(AKB_BRIDGED IS NULL) OR (NOT (AKB_BRIDGED = 'true'))"/>
+        <exclusive>true</exclusive>
+      </divert>
+      <divert name="akb-divert-app.bar">
+        <address>app.bar</address>
+        <forwarding-address>__akb.outbound</forwarding-address>
+        <filter string="(AKB_BRIDGED IS NULL) OR (NOT (AKB_BRIDGED = 'true'))"/>
+        <exclusive>true</exclusive>
+      </divert>
+    </diverts>
+
+    <broker-plugins>
+      <broker-plugin class-name="org.apache.activemq.artemis.akb.OrigRoutingTypePlugin"/>
+      <broker-plugin class-name="org.apache.activemq.artemis.akb.MockArtemisKafkaBridgePlugin">
+        <property key="outboundBridges" value="__akb.outbound"/>
+      </broker-plugin>
+    </broker-plugins>
+
+  </core>
+</configuration>

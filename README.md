@@ -1,1 +1,2 @@
-# artemis-kafka-bridge
+# Artemis -> Kafka Bridge
+
