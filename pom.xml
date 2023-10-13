@@ -53,14 +53,14 @@
         <version>${slf4j.version}</version>
       </dependency>
       <dependency>
-        <groupId>org.awaitility</groupId>
-        <artifactId>awaitility</artifactId>
-        <version>${awaitility.version}</version>
-      </dependency>
-      <dependency>
         <groupId>org.apache.activemq</groupId>
         <artifactId>artemis-junit-5</artifactId>
         <version>${artemis.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.awaitility</groupId>
+        <artifactId>awaitility</artifactId>
+        <version>${awaitility.version}</version>
       </dependency>
       <dependency>
         <groupId>org.slf4j</groupId>

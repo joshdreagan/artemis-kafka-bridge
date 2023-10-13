@@ -51,7 +51,8 @@
     <broker-plugins>
       <broker-plugin class-name="org.apache.activemq.artemis.akb.OrigRoutingTypePlugin"/>
       <broker-plugin class-name="org.apache.activemq.artemis.akb.MockArtemisKafkaBridgePlugin">
-        <property key="outboundBridges" value="__akb.outbound"/>
+        <property key="artemis.outbound-addresses" value="__akb.outbound"/>
+        <property key="artemis.inbound-address-includes" value="app.#"/>
       </broker-plugin>
     </broker-plugins>
 

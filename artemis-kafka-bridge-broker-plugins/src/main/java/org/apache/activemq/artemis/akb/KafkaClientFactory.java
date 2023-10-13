@@ -5,7 +5,7 @@ import org.apache.kafka.clients.producer.Producer;
 
 public interface KafkaClientFactory<P extends Producer, C extends Consumer> {
   
-  P kafkaProducer();
+  P createKafkaProducer();
   
-  C kafkaConsumer();
+  C createKafkaConsumer();
 }

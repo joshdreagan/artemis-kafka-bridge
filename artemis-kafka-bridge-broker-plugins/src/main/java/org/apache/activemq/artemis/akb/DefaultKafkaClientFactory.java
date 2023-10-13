@@ -6,12 +6,12 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 public class DefaultKafkaClientFactory implements KafkaClientFactory<KafkaProducer, KafkaConsumer> {
 
   @Override
-  public KafkaProducer kafkaProducer() {
+  public KafkaProducer createKafkaProducer() {
     throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
   }
 
   @Override
-  public KafkaConsumer kafkaConsumer() {
+  public KafkaConsumer createKafkaConsumer() {
     throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
   }
 }

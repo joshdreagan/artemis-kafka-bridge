@@ -11,7 +11,7 @@ public class MockKafkaClientFactory implements KafkaClientFactory<MockProducer, 
   private static MockConsumer kafkaConsumer;
   
   @Override
-  public MockProducer kafkaProducer() {
+  public MockProducer createKafkaProducer() {
     if (kafkaProducer == null) {
       kafkaProducer = new MockProducer(false, new ByteArraySerializer(), new ByteArraySerializer());
     }
@@ -19,7 +19,7 @@ public class MockKafkaClientFactory implements KafkaClientFactory<MockProducer, 
   }
 
   @Override
-  public MockConsumer kafkaConsumer() {
+  public MockConsumer createKafkaConsumer() {
     if (kafkaConsumer == null) {
       kafkaConsumer = new MockConsumer(OffsetResetStrategy.EARLIEST);
     }

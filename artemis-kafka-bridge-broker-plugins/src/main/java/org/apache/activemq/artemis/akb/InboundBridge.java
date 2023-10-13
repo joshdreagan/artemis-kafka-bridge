@@ -1,60 +1,131 @@
 package org.apache.activemq.artemis.akb;
 
+import java.util.Collections;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
+import org.apache.activemq.artemis.api.core.client.ClientProducer;
 import org.apache.activemq.artemis.api.core.client.ClientSession;
+import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class InboundBridge {
-  
+
   private static final Logger log = LoggerFactory.getLogger(InboundBridge.class);
-  
+
   private final String artemisInboundAddress;
-  private final InboundBridgeManager inboundBridgeManager;
+  private final ClientSessionFactory artemisConnection;
+  private final Consumer kafkaConsumer;
 
   private ClientSession artemisSession;
   private boolean running;
+  private boolean closed;
 
-  public InboundBridge(String artemisInboundAddress, InboundBridgeManager inboundBridgeManager) {
+  public InboundBridge(String artemisInboundAddress, ClientSessionFactory artemisConnection, Consumer kafkaConsumer) {
     this.artemisInboundAddress = artemisInboundAddress;
-    this.inboundBridgeManager = inboundBridgeManager;
+    this.artemisConnection = artemisConnection;
+    this.kafkaConsumer = kafkaConsumer;
   }
-  
+
+  public String getArtemisInboundAddress() {
+    checkClosed();
+    return artemisInboundAddress;
+  }
+
+  public ClientSessionFactory getArtemisConnection() {
+    checkClosed();
+    return artemisConnection;
+  }
+
+  public Consumer getKafkaConsumer() {
+    checkClosed();
+    return kafkaConsumer;
+  }
+
+  public boolean isRunning() {
+    return running;
+  }
+
+  public boolean isClosed() {
+    return closed;
+  }
+
+  private void checkClosed() {
+    if (closed) {
+      throw new IllegalStateException("This inbound bridge is closed.");
+    }
+  }
+
   public void start() {
+    checkClosed();
     if (!running) {
       log.debug("Starting inbound bridge: {}", artemisInboundAddress);
-       try {
-        artemisSession = inboundBridgeManager.getArtemisConnection().createSession();
-        
+      try {
+        if (artemisSession == null || artemisSession.isClosed()) {
+          artemisSession = artemisConnection.createSession();
+          ClientProducer artemisProducer = artemisSession.createProducer(artemisInboundAddress);
+          kafkaConsumer.subscribe(Collections.singleton(artemisInboundAddress));
+        }
+
         artemisSession.start();
         running = true;
       } catch (ActiveMQException e) {
         log.error("Unable to start the inbound bridge: {}", artemisInboundAddress);
         throw new RuntimeException(e);
       }
-   }
+    }
   }
-  
+
   public void stop() {
+    checkClosed();
     if (running) {
       log.debug("Stopping inbound bridge: {}", artemisInboundAddress);
-      try {
-        if (artemisSession != null) {
+      boolean stopped = true;
+      if (artemisSession != null) {
+        try {
           artemisSession.stop();
-          artemisSession.close();
+        } catch (ActiveMQException e) {
+          log.error("Unable to stop artemis session.");
+          throw new RuntimeException(e);
         }
-        running = false;
+      }
+      if (kafkaConsumer != null) {
+        try {
+        kafkaConsumer.unsubscribe();
+        } catch (Exception e) {
+          log.error("Unable to unsubscribe kafka consumer.");
+          throw new RuntimeException(e);
+        }
+      }
+      running = false;
+    }
+  }
+
+  public void restart() {
+    checkClosed();
+    stop();
+    start();
+  }
+
+  public void close() {
+    stop();
+    if (artemisSession != null) {
+      try {
+        artemisSession.close();
       } catch (ActiveMQException e) {
-        log.error("Unable to stop the inbound bridge: {}", artemisInboundAddress);
-        throw new RuntimeException(e);
+        log.error("Unable to close artemis session.");
       } finally {
         artemisSession = null;
       }
     }
-  }
-  
-  public void restart() {
-    stop();
-    start();
+    if (kafkaConsumer != null) {
+      try {
+        kafkaConsumer.close();
+      } catch (Exception e) {
+        log.error("Unable to close kafka consumer.");
+        log.debug("Stack trace:", e);
+      }
+    }
+    closed = true;
   }
 }
