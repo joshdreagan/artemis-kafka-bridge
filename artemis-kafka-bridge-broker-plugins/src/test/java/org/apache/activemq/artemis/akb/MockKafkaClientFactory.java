@@ -9,7 +9,7 @@ public class MockKafkaClientFactory implements KafkaClientFactory<MockProducer, 
 
   private static MockProducer kafkaProducer;
   private static MockConsumer kafkaConsumer;
-  
+
   @Override
   public MockProducer createKafkaProducer() {
     if (kafkaProducer == null) {

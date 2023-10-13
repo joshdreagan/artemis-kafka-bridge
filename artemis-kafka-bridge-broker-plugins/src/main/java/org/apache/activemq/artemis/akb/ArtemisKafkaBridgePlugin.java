@@ -26,6 +26,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   public static final String ARTEMIS_RETRY_INTERVAL = "artemis.retry-interval";
   public static final String ARTEMIS_RETRY_INTERVAL_MULTIPLIER = "artemis.retry-interval-multiplier";
   public static final String ARTEMIS_MAX_RETRY_INTERVAL = "artemis.max-retry-interval";
+  public static final String ARTEMIS_CALL_TIMEOUT = "artemis.call-timout";
 
   public static final String DEFAULT_ARTEMIS_OUTBOUND_ADDRESSES = "__akb.outbound";
   public static final String DEFAULT_ARTEMIS_INITIAL_CONNECT_ATTEMPTS = "-1";
@@ -33,6 +34,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   public static final String DEFAULT_ARTEMIS_RETRY_INTERVAL = "1000";
   public static final String DEFAULT_ARTEMIS_RETRY_INTERVAL_MULTIPLIER = "1.5";
   public static final String DEFAULT_ARTEMIS_MAX_RETRY_INTERVAL = "30000";
+  public static final String DEFAULT_ARTEMIS_CALL_TIMEOUT = "5000";
 
   public static final String DEFAULT_ADDRESS_SPLIT_REGEX = "\\s*[,:;\\s]\\s*";
 
@@ -55,6 +57,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   protected void initArtemisConnectionFactory(Map<String, String> properties) {
     artemisConnectionFactory = ActiveMQClient.createServerLocatorWithoutHA(new TransportConfiguration(InVMConnectorFactory.class.getName()));
 
+    artemisConnectionFactory.setCallTimeout(Long.parseLong(properties.getOrDefault(ARTEMIS_CALL_TIMEOUT, DEFAULT_ARTEMIS_CALL_TIMEOUT)));
     artemisConnectionFactory.setInitialConnectAttempts(Integer.parseInt(properties.getOrDefault(ARTEMIS_INITIAL_CONNECT_ATTEMPTS, DEFAULT_ARTEMIS_INITIAL_CONNECT_ATTEMPTS)));
     artemisConnectionFactory.setReconnectAttempts(Integer.parseInt(properties.getOrDefault(ARTEMIS_RECONNECT_ATTEMPTS, DEFAULT_ARTEMIS_RECONNECT_ATTEMPTS)));
     artemisConnectionFactory.setRetryInterval(Long.parseLong(properties.getOrDefault(ARTEMIS_RETRY_INTERVAL, DEFAULT_ARTEMIS_RETRY_INTERVAL)));
@@ -123,7 +126,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
       }
 
       try {
-        //inboundBridgeManager.start();
+        inboundBridgeManager.start();
       } catch (Exception e) {
         log.error("Unable to start inbound bridge manager.");
         log.debug("Stack trace:", e);

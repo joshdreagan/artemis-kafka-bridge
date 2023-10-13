@@ -1,11 +1,18 @@
 package org.apache.activemq.artemis.akb;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Collections;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
+import org.apache.activemq.artemis.api.core.client.ClientMessage;
 import org.apache.activemq.artemis.api.core.client.ClientProducer;
 import org.apache.activemq.artemis.api.core.client.ClientSession;
 import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.errors.WakeupException;
+import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,8 +70,39 @@ public class InboundBridge {
       try {
         if (artemisSession == null || artemisSession.isClosed()) {
           artemisSession = artemisConnection.createSession();
-          ClientProducer artemisProducer = artemisSession.createProducer(artemisInboundAddress);
+          ClientProducer artemisProducer = artemisSession.createProducer(artemisInboundAddress + ".inbound");
+          try {
           kafkaConsumer.subscribe(Collections.singleton(artemisInboundAddress));
+          while (true) {
+            ConsumerRecords<byte[], byte[]> kafkaRecords = kafkaConsumer.poll(Duration.ofMillis(5000L));
+            for (ConsumerRecord<byte[], byte[]> kafkaRecord : kafkaRecords) {
+              ClientMessage artemisMessage = artemisSession.createMessage(true);
+              String kafkaTopic = kafkaRecord.topic();
+              byte[] kafkaBody = kafkaRecord.value();
+              artemisMessage.getBodyBuffer().writeBytes(kafkaBody);
+              for (Header header : kafkaRecord.headers()) {
+                String kafkaHeaderName = header.key();
+                byte[] kafkaHeaderValue = header.value();
+                switch (kafkaHeaderName) {
+                  case AkbHeaders.HDR_AKB_MESSAGE_ID -> {
+                    artemisMessage.putStringProperty(ClientMessage.HDR_ORIG_MESSAGE_ID, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
+                  }
+                  case AkbHeaders.HDR_AKB_DESTINATION_NAME -> {
+                    artemisMessage.putStringProperty(ClientMessage.HDR_ORIGINAL_ADDRESS, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
+                  }
+                  case AkbHeaders.HDR_AKB_ROUTING_TYPE -> {
+                    artemisMessage.putStringProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
+                  }
+                }
+              }
+              artemisProducer.send(artemisMessage);
+            }
+          }
+          } catch (WakeupException e) {
+            log.debug("Got a wakeup");
+          } catch (RuntimeException e) {
+            log.error("Got an error processing message.", e);
+          }
         }
 
         artemisSession.start();

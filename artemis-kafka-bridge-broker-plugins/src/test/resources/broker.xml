@@ -19,11 +19,17 @@
     
     <addresses>
       <address name="app.foo">
+        <anycast/>
+      </address>
+      <address name="app.foo.inbound">
         <anycast>
-          <queue name="app.foo"/>
+          <queue name="app.foo.inbound"/>
         </anycast>
       </address>
       <address name="app.bar">
+        <multicast/>
+      </address>
+      <address name="app.bar.inbound">
         <multicast/>
       </address>
       <address name="__akb.outbound">
@@ -37,13 +43,11 @@
       <divert name="akb-divert-app.foo">
         <address>app.foo</address>
         <forwarding-address>__akb.outbound</forwarding-address>
-        <filter string="(AKB_BRIDGED IS NULL) OR (NOT (AKB_BRIDGED = 'true'))"/>
         <exclusive>true</exclusive>
       </divert>
       <divert name="akb-divert-app.bar">
         <address>app.bar</address>
         <forwarding-address>__akb.outbound</forwarding-address>
-        <filter string="(AKB_BRIDGED IS NULL) OR (NOT (AKB_BRIDGED = 'true'))"/>
         <exclusive>true</exclusive>
       </divert>
     </diverts>

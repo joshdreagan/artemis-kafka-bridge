@@ -157,6 +157,7 @@ public class InboundBridgeManager {
   public void onConsumerAdded(ServerConsumer artemisConsumer) {
     checkClosed();
     String artemisAddress = artemisConsumer.getQueueAddress().toString();
+    artemisAddress = artemisAddress.replaceAll("\\Q.inbound\\E$", "");
     Set<ServerConsumer> existingArtemisConsumers = artemisConsumers.getOrDefault(artemisAddress, new HashSet<>());
     existingArtemisConsumers.add(artemisConsumer);
     artemisConsumers.put(artemisAddress, existingArtemisConsumers);
