@@ -1,9 +1,13 @@
-package org.apache.activemq.artemis.akb;
+package org.apache.activemq.artemis.akb.kafka;
 
+import java.nio.file.Path;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 
-public class DefaultKafkaClientFactory implements KafkaClientFactory<KafkaProducer, KafkaConsumer> {
+public class DefaultClientFactory implements ClientFactory<KafkaProducer, KafkaConsumer> {
+
+  public DefaultClientFactory() {
+  }
 
   @Override
   public KafkaProducer createKafkaProducer() {

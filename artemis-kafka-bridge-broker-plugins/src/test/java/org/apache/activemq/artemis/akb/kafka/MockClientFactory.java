@@ -1,11 +1,12 @@
-package org.apache.activemq.artemis.akb;
+package org.apache.activemq.artemis.akb.kafka;
 
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.apache.activemq.artemis.akb.kafka.ClientFactory;
 
-public class MockKafkaClientFactory implements KafkaClientFactory<MockProducer, MockConsumer> {
+public class MockClientFactory implements ClientFactory<MockProducer, MockConsumer> {
 
   private static MockProducer kafkaProducer;
   private static MockConsumer kafkaConsumer;

@@ -1,5 +1,6 @@
 package org.apache.activemq.artemis.akb;
 
+import org.apache.activemq.artemis.akb.kafka.DefaultClientFactory;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -13,12 +14,14 @@ import org.apache.activemq.artemis.core.server.ServerConsumer;
 import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerPlugin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.activemq.artemis.akb.kafka.ClientFactory;
 
 public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
 
   private static final Logger log = LoggerFactory.getLogger(ArtemisKafkaBridgePlugin.class);
 
   public static final String ARTEMIS_OUTBOUND_ADDRESSES = "artemis.outbound-addresses";
+  public static final String ARTEMIS_INBOUND_ADDRESS_SUFFIX = "artemis.inbound-address-suffix";
   public static final String ARTEMIS_INBOUND_ADDRESS_INCLUDES = "artemis.inbound-address-includes";
   public static final String ARTEMIS_INBOUND_ADDRESS_EXCLUDES = "artemis.inbound-address-excludes";
   public static final String ARTEMIS_INITIAL_CONNECT_ATTEMPTS = "artemis.initial-connect-attempts";
@@ -29,6 +32,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   public static final String ARTEMIS_CALL_TIMEOUT = "artemis.call-timout";
 
   public static final String DEFAULT_ARTEMIS_OUTBOUND_ADDRESSES = "__akb.outbound";
+  public static final String DEFAULT_ARTEMIS_INBOUND_ADDRESS_SUFFIX = ".inbound";
   public static final String DEFAULT_ARTEMIS_INITIAL_CONNECT_ATTEMPTS = "-1";
   public static final String DEFAULT_ARTEMIS_RECONNECT_ATTEMPTS = "-1";
   public static final String DEFAULT_ARTEMIS_RETRY_INTERVAL = "1000";
@@ -39,7 +43,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   public static final String DEFAULT_ADDRESS_SPLIT_REGEX = "\\s*[,:;\\s]\\s*";
 
   protected ServerLocator artemisConnectionFactory;
-  protected KafkaClientFactory kafkaClientFactory;
+  protected ClientFactory kafkaClientFactory;
   protected OutboundBridgeManager outboundBridgeManager;
   protected InboundBridgeManager inboundBridgeManager;
 
@@ -66,7 +70,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   }
 
   protected void initKafkaClientFactory(Map<String, String> properties) {
-    kafkaClientFactory = new DefaultKafkaClientFactory();
+    kafkaClientFactory = new DefaultClientFactory();
 
     // TODO
   }
@@ -80,15 +84,16 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
 
   protected void initInboundBridgeManager(Map<String, String> properties) {
     inboundBridgeManager = new InboundBridgeManager();
+    
+    String artemisInboundAddressSuffix = properties.getOrDefault(ARTEMIS_INBOUND_ADDRESS_SUFFIX, DEFAULT_ARTEMIS_INBOUND_ADDRESS_SUFFIX);
+    inboundBridgeManager.setInboundAddressSuffix(artemisInboundAddressSuffix);
 
     String artemisOutboundAddresses = properties.getOrDefault(ARTEMIS_OUTBOUND_ADDRESSES, DEFAULT_ARTEMIS_OUTBOUND_ADDRESSES);
     inboundBridgeManager.getArtemisInboundAddressExcludes().addAll(Arrays.asList(artemisOutboundAddresses.split(DEFAULT_ADDRESS_SPLIT_REGEX)));
-
     String artemisInboundAddressExcludes = properties.get(ARTEMIS_INBOUND_ADDRESS_EXCLUDES);
     if (artemisInboundAddressExcludes != null) {
       inboundBridgeManager.getArtemisInboundAddressExcludes().addAll(Arrays.asList(artemisInboundAddressExcludes.split(DEFAULT_ADDRESS_SPLIT_REGEX)));
     }
-
     String artemisInboundAddressIncludes = properties.get(ARTEMIS_INBOUND_ADDRESS_INCLUDES);
     if (artemisInboundAddressIncludes != null) {
       inboundBridgeManager.getArtemisInboundAddressIncludes().addAll(Arrays.asList(artemisInboundAddressIncludes.split(DEFAULT_ADDRESS_SPLIT_REGEX)));

@@ -1,8 +1,11 @@
 package org.apache.activemq.artemis.akb;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Collections;
+import java.util.Objects;
+import org.apache.activemq.artemis.akb.kafka.ClientFactory;
+import org.apache.activemq.artemis.akb.kafka.ConsumerRecordHandler;
+import org.apache.activemq.artemis.akb.kafka.ConsumerRecordPoller;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.client.ClientMessage;
 import org.apache.activemq.artemis.api.core.client.ClientProducer;
@@ -10,8 +13,6 @@ import org.apache.activemq.artemis.api.core.client.ClientSession;
 import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,31 +23,38 @@ public class InboundBridge {
 
   private final String artemisInboundAddress;
   private final ClientSessionFactory artemisConnection;
-  private final Consumer kafkaConsumer;
+  private final String kafkaInboundAddress;
+  private final ClientFactory kafkaClientFactory;
 
   private ClientSession artemisSession;
-  private boolean running;
-  private boolean closed;
+  private ClientProducer artemisProducer;
+  private ConsumerRecordPoller kafkaConsumerRecordPoller;
+  private Consumer kafkaConsumer;
+  
+  private boolean running = false;
+  private boolean closed = false;
 
-  public InboundBridge(String artemisInboundAddress, ClientSessionFactory artemisConnection, Consumer kafkaConsumer) {
-    this.artemisInboundAddress = artemisInboundAddress;
-    this.artemisConnection = artemisConnection;
-    this.kafkaConsumer = kafkaConsumer;
+  public InboundBridge(String artemisInboundAddress, ClientSessionFactory artemisConnection, String kafkaInboundAddress, ClientFactory kafkaClientFactory) {
+    this.artemisInboundAddress = Objects.requireNonNull(artemisInboundAddress, "The artemisInboundAddress parameter must not be null.");
+    this.artemisConnection = Objects.requireNonNull(artemisConnection, "The artemisConnection parameter must not be null.");
+    this.kafkaInboundAddress = Objects.requireNonNull(kafkaInboundAddress, "The kafkaInboundAddress parameter must not be null.");
+    this.kafkaClientFactory = Objects.requireNonNull(kafkaClientFactory, "The kafkaClientFactory parameter must not be null.");
   }
 
   public String getArtemisInboundAddress() {
-    checkClosed();
     return artemisInboundAddress;
   }
 
   public ClientSessionFactory getArtemisConnection() {
-    checkClosed();
     return artemisConnection;
   }
 
-  public Consumer getKafkaConsumer() {
-    checkClosed();
-    return kafkaConsumer;
+  public String getKafkaInboundAddress() {
+    return kafkaInboundAddress;
+  }
+
+  public ClientFactory getKafkaClientFactory() {
+    return kafkaClientFactory;
   }
 
   public boolean isRunning() {
@@ -57,103 +65,89 @@ public class InboundBridge {
     return closed;
   }
 
-  private void checkClosed() {
+  private void throwIfClosed() {
     if (closed) {
       throw new IllegalStateException("This inbound bridge is closed.");
     }
   }
 
   public void start() {
-    checkClosed();
-    if (!running) {
-      log.debug("Starting inbound bridge: {}", artemisInboundAddress);
-      try {
-        if (artemisSession == null || artemisSession.isClosed()) {
-          artemisSession = artemisConnection.createSession();
-          ClientProducer artemisProducer = artemisSession.createProducer(artemisInboundAddress + ".inbound");
-          try {
-          kafkaConsumer.subscribe(Collections.singleton(artemisInboundAddress));
-          while (true) {
-            ConsumerRecords<byte[], byte[]> kafkaRecords = kafkaConsumer.poll(Duration.ofMillis(5000L));
-            for (ConsumerRecord<byte[], byte[]> kafkaRecord : kafkaRecords) {
-              ClientMessage artemisMessage = artemisSession.createMessage(true);
-              String kafkaTopic = kafkaRecord.topic();
-              byte[] kafkaBody = kafkaRecord.value();
-              artemisMessage.getBodyBuffer().writeBytes(kafkaBody);
-              for (Header header : kafkaRecord.headers()) {
-                String kafkaHeaderName = header.key();
-                byte[] kafkaHeaderValue = header.value();
-                switch (kafkaHeaderName) {
-                  case AkbHeaders.HDR_AKB_MESSAGE_ID -> {
-                    artemisMessage.putStringProperty(ClientMessage.HDR_ORIG_MESSAGE_ID, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
-                  }
-                  case AkbHeaders.HDR_AKB_DESTINATION_NAME -> {
-                    artemisMessage.putStringProperty(ClientMessage.HDR_ORIGINAL_ADDRESS, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
-                  }
-                  case AkbHeaders.HDR_AKB_ROUTING_TYPE -> {
-                    artemisMessage.putStringProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
-                  }
-                }
-              }
-              artemisProducer.send(artemisMessage);
-            }
-          }
-          } catch (WakeupException e) {
-            log.debug("Got a wakeup");
-          } catch (RuntimeException e) {
-            log.error("Got an error processing message.", e);
-          }
-        }
+    throwIfClosed();
+    if (running) {
+      return;
+    }
 
-        artemisSession.start();
-        running = true;
-      } catch (ActiveMQException e) {
-        log.error("Unable to start the inbound bridge: {}", artemisInboundAddress);
-        throw new RuntimeException(e);
+    log.debug("Starting inbound bridge: {}", artemisInboundAddress);
+    try {
+      if (artemisSession == null || artemisSession.isClosed()) {
+        artemisSession = artemisConnection.createSession();
+        artemisProducer = artemisSession.createProducer(artemisInboundAddress);
       }
+      artemisSession.start();
+
+      if (kafkaConsumer == null) {
+        kafkaConsumer = kafkaClientFactory.createKafkaConsumer();
+      }
+      kafkaConsumer.subscribe(Collections.singleton(kafkaInboundAddress));
+      if (kafkaConsumerRecordPoller == null) {
+        kafkaConsumerRecordPoller = new ConsumerRecordPoller<>(kafkaConsumer, new InboundConsumerRecordHandler());
+      }
+      kafkaConsumerRecordPoller.start();
+      running = true;
+    } catch (Exception e) {
+      log.error("Unable to start the inbound bridge: {}", artemisInboundAddress);
+      throw new RuntimeException(e);
     }
   }
 
   public void stop() {
-    checkClosed();
-    if (running) {
-      log.debug("Stopping inbound bridge: {}", artemisInboundAddress);
-      boolean stopped = true;
-      if (artemisSession != null) {
-        try {
-          artemisSession.stop();
-        } catch (ActiveMQException e) {
-          log.error("Unable to stop artemis session.");
-          throw new RuntimeException(e);
-        }
-      }
-      if (kafkaConsumer != null) {
-        try {
-        kafkaConsumer.unsubscribe();
-        } catch (Exception e) {
-          log.error("Unable to unsubscribe kafka consumer.");
-          throw new RuntimeException(e);
-        }
-      }
-      running = false;
+    throwIfClosed();
+    if (!running) {
+      return;
     }
+
+    log.debug("Stopping inbound bridge: {}", artemisInboundAddress);
+    if (kafkaConsumerRecordPoller != null) {
+      try {
+        kafkaConsumerRecordPoller.stop();
+      } catch (Exception e) {
+        log.error("Unable to stop kafka consumer record poller.");
+        throw new RuntimeException(e);
+      }
+    }
+    if (kafkaConsumer != null) {
+      try {
+        kafkaConsumer.unsubscribe();
+      } catch (Exception e) {
+        log.error("Unable to unsubscribe kafka consumer.");
+        throw new RuntimeException(e);
+      }
+    }
+    if (artemisSession != null) {
+      try {
+        artemisSession.stop();
+      } catch (ActiveMQException e) {
+        log.error("Unable to stop artemis session.");
+        throw new RuntimeException(e);
+      }
+    }
+    running = false;
   }
 
   public void restart() {
-    checkClosed();
+    throwIfClosed();
     stop();
     start();
   }
 
   public void close() {
     stop();
-    if (artemisSession != null) {
+    if (kafkaConsumerRecordPoller != null) {
       try {
-        artemisSession.close();
-      } catch (ActiveMQException e) {
-        log.error("Unable to close artemis session.");
-      } finally {
-        artemisSession = null;
+        kafkaConsumerRecordPoller.close();
+      } catch (Exception e) {
+        log.error("Unable to stop kafka consumer record poller.");
+        log.debug("Stack trace:", e);
       }
     }
     if (kafkaConsumer != null) {
@@ -164,6 +158,47 @@ public class InboundBridge {
         log.debug("Stack trace:", e);
       }
     }
+    if (artemisSession != null) {
+      try {
+        artemisSession.close();
+      } catch (ActiveMQException e) {
+        log.error("Unable to close artemis session.");
+      } finally {
+        artemisProducer = null;
+        artemisSession = null;
+      }
+    }
     closed = true;
+  }
+
+  private class InboundConsumerRecordHandler implements ConsumerRecordHandler<byte[], byte[]> {
+
+    @Override
+    public void onConsumerRecord(ConsumerRecord<byte[], byte[]> consumerRecord) {
+      try {
+        ClientMessage artemisMessage = artemisSession.createMessage(true);
+        String kafkaTopic = consumerRecord.topic();
+        byte[] kafkaBody = consumerRecord.value();
+        artemisMessage.getBodyBuffer().writeBytes(kafkaBody);
+        for (Header header : consumerRecord.headers()) {
+          String kafkaHeaderName = header.key();
+          byte[] kafkaHeaderValue = header.value();
+          switch (kafkaHeaderName) {
+            case AkbHeaders.HDR_AKB_MESSAGE_ID -> {
+              artemisMessage.putStringProperty(ClientMessage.HDR_ORIG_MESSAGE_ID, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
+            }
+            case AkbHeaders.HDR_AKB_DESTINATION_NAME -> {
+              artemisMessage.putStringProperty(ClientMessage.HDR_ORIGINAL_ADDRESS, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
+            }
+            case AkbHeaders.HDR_AKB_ROUTING_TYPE -> {
+              artemisMessage.putStringProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
+            }
+          }
+        }
+        artemisProducer.send(artemisMessage);
+      } catch (Exception e) {
+        log.error("Unable to process message: {}", consumerRecord);
+      }
+    }
   }
 }

@@ -1,5 +1,6 @@
 package org.apache.activemq.artemis.akb;
 
+import org.apache.activemq.artemis.akb.kafka.MockClientFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
@@ -13,7 +14,6 @@ import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -26,7 +26,7 @@ public class ArtemisKafkaBrokerPluginTest {
   @RegisterExtension
   private static EmbeddedActiveMQExtension artemisServer = new EmbeddedActiveMQExtension("broker.xml");
 
-  private static MockKafkaClientFactory kafkaClientFactory = new MockKafkaClientFactory();
+  private static MockClientFactory kafkaClientFactory = new MockClientFactory();
 
   private MockProducer<byte[], byte[]> kafkaProducer;
   private MockConsumer<byte[], byte[]> kafkaConsumer;
@@ -43,7 +43,6 @@ public class ArtemisKafkaBrokerPluginTest {
   }
 
   @Test
-  @Disabled
   void testArtemisProducer() throws Exception {
     artemisServer.sendMessage("app.foo", "Holy crap it works!!!");
 
@@ -68,6 +67,6 @@ public class ArtemisKafkaBrokerPluginTest {
 
     artemisServer.setDefaultReceiveTimeout(30000L);
     ClientMessage artemisMessage = artemisServer.receiveMessage("app.foo.inbound");
-    await().atMost(15L, TimeUnit.SECONDS).until(() -> artemisMessage, is(notNullValue()));
+    await().atMost(5L, TimeUnit.SECONDS).until(() -> artemisMessage, is(notNullValue()));
   }
 }

@@ -2,6 +2,7 @@ package org.apache.activemq.artemis.akb;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import org.apache.activemq.artemis.akb.kafka.ClientFactory;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.client.ClientConsumer;
@@ -20,31 +21,30 @@ public class OutboundBridge {
 
   private final String artemisOutboundAddress;
   private final ClientSessionFactory artemisConnection;
-  private final Producer kafkaProducer;
+  private final ClientFactory kafkaClientFactory;
 
   private ClientSession artemisSession;
-  private boolean running;
-  private boolean closed;
+  private Producer kafkaProducer;
 
-  public OutboundBridge(String artemisOutboundAddress, ClientSessionFactory artemisConnection, Producer kafkaProducer) {
-    this.artemisOutboundAddress = artemisOutboundAddress;
-    this.artemisConnection = artemisConnection;
-    this.kafkaProducer = kafkaProducer;
+  private boolean running = false;
+  private boolean closed = false;
+
+  public OutboundBridge(String artemisOutboundAddress, ClientSessionFactory artemisConnection, ClientFactory kafkaClientFactory) {
+    this.artemisOutboundAddress = Objects.requireNonNull(artemisOutboundAddress, "The artemisOutboundAddress parameter must not be null.");
+    this.artemisConnection = Objects.requireNonNull(artemisConnection, "The artemisConnection parameter must not be null.");
+    this.kafkaClientFactory = Objects.requireNonNull(kafkaClientFactory, "The kafkaClientFactory parameter must not be null.");
   }
 
   public String getArtemisOutboundAddress() {
-    checkClosed();
     return artemisOutboundAddress;
   }
 
   public ClientSessionFactory getArtemisConnection() {
-    checkClosed();
     return artemisConnection;
   }
 
-  public Producer getKafkaProducer() {
-    checkClosed();
-    return kafkaProducer;
+  public ClientFactory getKafkaClientFactory() {
+    return kafkaClientFactory;
   }
 
   public boolean isRunning() {
@@ -55,51 +55,58 @@ public class OutboundBridge {
     return closed;
   }
 
-  private void checkClosed() {
+  private void throwIfClosed() {
     if (closed) {
       throw new IllegalStateException("This outbound bridge is closed.");
     }
   }
 
   public void start() {
-    checkClosed();
-    if (!running) {
-      log.debug("Starting outbound bridge: {}", artemisOutboundAddress);
-      try {
-        if (artemisSession == null || artemisSession.isClosed()) {
-          artemisSession = artemisConnection.createSession();
+    throwIfClosed();
+    if (running) {
+      return;
+    }
 
-          ClientConsumer artemisConsumer = artemisSession.createConsumer(artemisOutboundAddress);
-          artemisConsumer.setMessageHandler(new OutboundMessageHandler());
-        }
-
-        artemisSession.start();
-        running = true;
-      } catch (ActiveMQException e) {
-        log.error("Unable to start the outbound bridge: {}", artemisOutboundAddress);
-        throw new RuntimeException(e);
+    log.debug("Starting outbound bridge: {}", artemisOutboundAddress);
+    try {
+      if (kafkaProducer == null) {
+        kafkaProducer = kafkaClientFactory.createKafkaProducer();
       }
+      if (artemisSession == null || artemisSession.isClosed()) {
+        artemisSession = artemisConnection.createSession();
+
+        ClientConsumer artemisConsumer = artemisSession.createConsumer(artemisOutboundAddress);
+        artemisConsumer.setMessageHandler(new OutboundMessageHandler());
+      }
+      artemisSession.start();
+      
+      running = true;
+    } catch (ActiveMQException e) {
+      log.error("Unable to start the outbound bridge: {}", artemisOutboundAddress);
+      throw new RuntimeException(e);
     }
   }
 
   public void stop() {
-    checkClosed();
-    if (running) {
-      log.debug("Stopping outbound bridge: {}", artemisOutboundAddress);
-      if (artemisSession != null) {
-        try {
-          artemisSession.stop();
-        } catch (ActiveMQException e) {
-          log.error("Unable to stop artemis session.");
-          throw new RuntimeException(e);
-        }
-      }
-      running = false;
+    throwIfClosed();
+    if (!running) {
+      return;
     }
+
+    log.debug("Stopping outbound bridge: {}", artemisOutboundAddress);
+    if (artemisSession != null) {
+      try {
+        artemisSession.stop();
+      } catch (ActiveMQException e) {
+        log.error("Unable to stop artemis session.");
+        throw new RuntimeException(e);
+      }
+    }
+    running = false;
   }
 
   public void restart() {
-    checkClosed();
+    throwIfClosed();
     stop();
     start();
   }
@@ -122,6 +129,8 @@ public class OutboundBridge {
       } catch (Exception e) {
         log.error("Unable to close kafka producer.");
         log.debug("Stack trace:", e);
+      } finally {
+        kafkaProducer = null;
       }
     }
     closed = true;

@@ -1,11 +1,14 @@
 package org.apache.activemq.artemis.akb;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
 import org.apache.activemq.artemis.api.core.client.ServerLocator;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
@@ -13,6 +16,7 @@ import org.apache.activemq.artemis.core.server.ServerConsumer;
 import org.apache.activemq.artemis.core.settings.impl.Match;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.activemq.artemis.akb.kafka.ClientFactory;
 
 public class InboundBridgeManager {
 
@@ -20,7 +24,8 @@ public class InboundBridgeManager {
 
   private ActiveMQServer artemisServer;
   private ServerLocator artemisConnectionFactory;
-  private KafkaClientFactory kafkaClientFactory;
+  private ClientFactory kafkaClientFactory;
+  private String inboundAddressSuffix;
   private final Set<String> artemisInboundAddressIncludes = new HashSet<>();
   private final Set<String> artemisInboundAddressExcludes = new HashSet<>();
 
@@ -30,46 +35,75 @@ public class InboundBridgeManager {
   private final Map<String, InboundBridge> inboundBridges = new HashMap<>();
   private ClientSessionFactory artemisConnection;
 
-  private boolean running;
-  private boolean closed;
+  private final ReentrantLock stateLock = new ReentrantLock();
+
+  private boolean running = false;
+  private boolean closed = false;
 
   public ActiveMQServer getArtemisServer() {
     return artemisServer;
   }
 
   public void setArtemisServer(ActiveMQServer artemisServer) {
-    checkClosed();
-    this.artemisServer = artemisServer;
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      throwIfRunning();
+      this.artemisServer = artemisServer;
+    });
   }
 
   public ServerLocator getArtemisConnectionFactory() {
-    checkClosed();
     return artemisConnectionFactory;
   }
 
   public void setArtemisConnectionFactory(ServerLocator artemisConnectionFactory) {
-    checkClosed();
-    this.artemisConnectionFactory = artemisConnectionFactory;
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      throwIfRunning();
+      this.artemisConnectionFactory = artemisConnectionFactory;
+    });
   }
 
-  public KafkaClientFactory getKafkaClientFactory() {
-    checkClosed();
+  public ClientFactory getKafkaClientFactory() {
     return kafkaClientFactory;
   }
 
-  public void setKafkaClientFactory(KafkaClientFactory kafkaClientFactory) {
-    checkClosed();
-    this.kafkaClientFactory = kafkaClientFactory;
+  public void setKafkaClientFactory(ClientFactory kafkaClientFactory) {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      throwIfRunning();
+      this.kafkaClientFactory = kafkaClientFactory;
+    });
+  }
+
+  public String getInboundAddressSuffix() {
+    return inboundAddressSuffix;
+  }
+
+  public void setInboundAddressSuffix(String inboundAddressSuffix) {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      throwIfRunning();
+      this.inboundAddressSuffix = inboundAddressSuffix;
+    });
   }
 
   public Set<String> getArtemisInboundAddressIncludes() {
-    checkClosed();
-    return artemisInboundAddressIncludes;
+    return invokeStateChangingOperation(() -> {
+      if (closed || running) {
+        return Collections.unmodifiableSet(artemisInboundAddressIncludes);
+      }
+      return artemisInboundAddressIncludes;
+    });
   }
 
   public Set<String> getArtemisInboundAddressExcludes() {
-    checkClosed();
-    return artemisInboundAddressExcludes;
+    return invokeStateChangingOperation(() -> {
+      if (closed || running) {
+        return Collections.unmodifiableSet(artemisInboundAddressExcludes);
+      }
+      return artemisInboundAddressExcludes;
+    });
   }
 
   public boolean isRunning() {
@@ -80,24 +114,50 @@ public class InboundBridgeManager {
     return closed;
   }
 
-  private void checkClosed() {
+  private void invokeStateChangingOperation(Runnable operation) {
+    try {
+      stateLock.lock();
+      operation.run();
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
+  private <T> T invokeStateChangingOperation(Supplier<T> operation) {
+    try {
+      stateLock.lock();
+      return operation.get();
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
+  private void throwIfClosed() {
     if (closed) {
       throw new IllegalStateException("This inbound bridge manager is closed.");
     }
   }
-  
-  private void checkState() {
-    checkClosed();
+
+  private void throwIfRunning() {
+    if (running) {
+      throw new IllegalStateException("This inbound bridge manager is currently runnning.");
+    }
+  }
+
+  private void throwIfNotReady() {
     try {
       Objects.requireNonNull(artemisServer, "The artemisServer has not been set.");
       Objects.requireNonNull(artemisConnectionFactory, "The artemisConnectionFactory has not been set.");
       Objects.requireNonNull(kafkaClientFactory, "The kafkaClientFactory has not been set.");
+      Objects.requireNonNull(inboundAddressSuffix, "The inboundAddressSuffix has not been set.");
     } catch (NullPointerException e) {
       throw new IllegalStateException(e.getMessage());
     }
   }
 
-  private void initialize() {
+  private void initializeIfNecessary() {
+    throwIfNotReady();
+
     artemisAddressIncludesPredicate = null;
     for (String artemisAddress : artemisInboundAddressIncludes) {
       Predicate<String> predicate = Match.createPattern(artemisAddress, artemisServer.getConfiguration().getWildcardConfiguration(), true).asMatchPredicate();
@@ -109,12 +169,14 @@ public class InboundBridgeManager {
       artemisAddressExcludesPredicate = (artemisAddressExcludesPredicate == null) ? predicate : artemisAddressExcludesPredicate.or(predicate);
     }
 
-    try {
-      artemisConnection = artemisConnectionFactory.createSessionFactory();
-    } catch (Exception e) {
-      log.error("Unable to create connection to broker.");
-      log.debug("Stack trace:", e);
-      throw new RuntimeException(e);
+    if (artemisConnection == null || artemisConnection.isClosed()) {
+      try {
+        artemisConnection = artemisConnectionFactory.createSessionFactory();
+      } catch (Exception e) {
+        log.error("Unable to create connection to broker.");
+        log.debug("Stack trace:", e);
+        throw new RuntimeException(e);
+      }
     }
 
     for (Map.Entry<String, Set<ServerConsumer>> artemisConsumersEntry : artemisConsumers.entrySet()) {
@@ -143,7 +205,8 @@ public class InboundBridgeManager {
     if (shouldInclude) {
       InboundBridge inboundBridge = inboundBridges.get(artemisAddress);
       if (inboundBridge == null) {
-        inboundBridge = new InboundBridge(artemisAddress, artemisConnection, kafkaClientFactory.createKafkaConsumer());
+        String kafkaAddress = artemisAddress.replaceAll("\\Q" + inboundAddressSuffix + "\\E$", "");
+        inboundBridge = new InboundBridge(artemisAddress, artemisConnection, kafkaAddress, kafkaClientFactory);
         if (start) {
           inboundBridge.start();
         }
@@ -155,37 +218,51 @@ public class InboundBridgeManager {
   }
 
   public void onConsumerAdded(ServerConsumer artemisConsumer) {
-    checkClosed();
-    String artemisAddress = artemisConsumer.getQueueAddress().toString();
-    artemisAddress = artemisAddress.replaceAll("\\Q.inbound\\E$", "");
-    Set<ServerConsumer> existingArtemisConsumers = artemisConsumers.getOrDefault(artemisAddress, new HashSet<>());
-    existingArtemisConsumers.add(artemisConsumer);
-    artemisConsumers.put(artemisAddress, existingArtemisConsumers);
+    invokeStateChangingOperation(() -> {
+      if (closed) {
+        log.debug("Ignoring onConsumerAdded({}). This inbound bridge manager is already closed.", artemisConsumer.getID());
+        return;
+      }
 
-    if (running) {
-      addNewInboundBridge(artemisAddress, true);
-    }
+      String artemisAddress = artemisConsumer.getQueueAddress().toString();
+      Set<ServerConsumer> existingArtemisConsumers = artemisConsumers.getOrDefault(artemisAddress, new HashSet<>());
+      existingArtemisConsumers.add(artemisConsumer);
+      artemisConsumers.put(artemisAddress, existingArtemisConsumers);
+
+      if (running) {
+        addNewInboundBridge(artemisAddress, true);
+      }
+    });
   }
 
   public void onConsumerRemoved(ServerConsumer artemisConsumer) {
-    checkClosed();
-    String artemisAddress = artemisConsumer.getQueueAddress().toString();
-    Set<ServerConsumer> existingConsumers = artemisConsumers.get(artemisAddress);
-    if (existingConsumers == null || existingConsumers.isEmpty()) {
-      InboundBridge inboundBridge = inboundBridges.remove(artemisAddress);
-      if (inboundBridge != null) {
-        inboundBridge.stop();
+    invokeStateChangingOperation(() -> {
+      if (closed) {
+        log.debug("Ignoring onConsumerRemoved({}). This inbound bridge manager is already closed.", artemisConsumer.getID());
+        return;
       }
-      artemisConsumers.remove(artemisAddress);
-    }
+
+      String artemisAddress = artemisConsumer.getQueueAddress().toString();
+      Set<ServerConsumer> existingConsumers = artemisConsumers.get(artemisAddress);
+      if (existingConsumers == null || existingConsumers.isEmpty()) {
+        InboundBridge inboundBridge = inboundBridges.remove(artemisAddress);
+        if (inboundBridge != null) {
+          inboundBridge.stop();
+        }
+        artemisConsumers.remove(artemisAddress);
+      }
+    });
   }
 
-  public void start() {
-    checkClosed();
-    if (!running) {
-      checkState();
-      initialize();
+  public synchronized void start() {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      if (running) {
+        return;
+      }
+
       log.debug("Starting {} inbound bridges.", inboundBridges.size());
+      initializeIfNecessary();
       for (Map.Entry<String, InboundBridge> inboundBridgesEntry : inboundBridges.entrySet()) {
         try {
           inboundBridgesEntry.getValue().start();
@@ -195,12 +272,16 @@ public class InboundBridgeManager {
         }
       }
       running = true;
-    }
+    });
   }
 
-  public void stop() {
-    checkClosed();
-    if (running) {
+  public synchronized void stop() {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      if (!running) {
+        return;
+      }
+
       log.debug("Stopping {} inbound bridges.", inboundBridges.size());
       Set<String> inboundBridgesToRemove = new HashSet<>();
       for (Map.Entry<String, InboundBridge> inboundBridgesEntry : inboundBridges.entrySet()) {
@@ -220,48 +301,45 @@ public class InboundBridgeManager {
         inboundBridges.remove(inboundBridgeAddress);
       }
       running = false;
-    }
+    });
   }
 
-  public void restart() {
-    checkClosed();
-    stop();
-    start();
+  public synchronized void restart() {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      stop();
+      start();
+    });
   }
 
-  public void close() {
-    stop();
-    log.debug("Closing {} inbound bridges.", inboundBridges.size());
-    try {
-      for (Map.Entry<String, InboundBridge> inboundBridgesEntry : inboundBridges.entrySet()) {
+  public synchronized void close() {
+    invokeStateChangingOperation(() -> {
+      stop();
+      log.debug("Closing {} inbound bridges.", inboundBridges.size());
+      try {
+        for (Map.Entry<String, InboundBridge> inboundBridgesEntry : inboundBridges.entrySet()) {
+          try {
+            inboundBridgesEntry.getValue().close();
+          } catch (Exception e) {
+            log.error("Unable to close inbound bridge for {}.", inboundBridgesEntry.getKey());
+            log.debug("Stack trace:", e);
+          }
+        }
+      } finally {
+        inboundBridges.clear();
+      }
+      artemisConsumers.clear();
+      if (artemisConnection != null) {
         try {
-          inboundBridgesEntry.getValue().close();
+          artemisConnection.close();
         } catch (Exception e) {
-          log.error("Unable to close inbound bridge for {}.", inboundBridgesEntry.getKey());
+          log.error("Unable to close artemis connection.");
           log.debug("Stack trace:", e);
+        } finally {
+          artemisConnection = null;
         }
       }
-    } finally {
-      inboundBridges.clear();
-    }
-    artemisConsumers.clear();
-    artemisAddressIncludesPredicate = null;
-    artemisAddressExcludesPredicate = null;
-    if (artemisConnection != null) {
-      try {
-        artemisConnection.close();
-      } catch (Exception e) {
-        log.error("Unable to close artemis connection.");
-        log.debug("Stack trace:", e);
-      } finally {
-        artemisConnection = null;
-      }
-    }
-    artemisConnectionFactory = null;
-    kafkaClientFactory = null;
-    artemisInboundAddressExcludes.clear();
-    artemisInboundAddressIncludes.clear();
-    artemisServer = null;
-    closed = true;
+      closed = true;
+    });
   }
 }

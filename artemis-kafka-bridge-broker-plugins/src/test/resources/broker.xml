@@ -17,6 +17,13 @@
       <acceptor name="invm">vm://0</acceptor>
     </acceptors>
     
+    <address-settings>
+      <address-setting match="app.*.inbound">
+        <max-size-messages>5</max-size-messages>
+        <address-full-policy>BLOCK</address-full-policy>
+      </address-setting>
+    </address-settings>
+    
     <addresses>
       <address name="app.foo">
         <anycast/>
@@ -56,7 +63,7 @@
       <broker-plugin class-name="org.apache.activemq.artemis.akb.OrigRoutingTypePlugin"/>
       <broker-plugin class-name="org.apache.activemq.artemis.akb.MockArtemisKafkaBridgePlugin">
         <property key="artemis.outbound-addresses" value="__akb.outbound"/>
-        <property key="artemis.inbound-address-includes" value="app.#"/>
+        <property key="artemis.inbound-address-includes" value="app.*.inbound"/>
       </broker-plugin>
     </broker-plugins>
 

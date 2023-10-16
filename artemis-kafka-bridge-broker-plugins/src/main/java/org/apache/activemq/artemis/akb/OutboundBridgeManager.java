@@ -1,15 +1,19 @@
 package org.apache.activemq.artemis.akb;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
 import org.apache.activemq.artemis.api.core.client.ServerLocator;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.activemq.artemis.akb.kafka.ClientFactory;
 
 public class OutboundBridgeManager {
 
@@ -17,48 +21,60 @@ public class OutboundBridgeManager {
 
   private ActiveMQServer artemisServer;
   private ServerLocator artemisConnectionFactory;
-  private KafkaClientFactory kafkaClientFactory;
+  private ClientFactory kafkaClientFactory;
   private final Set<String> artemisOutboundAddresses = new HashSet<>();
 
   private final Map<String, OutboundBridge> outboundBridges = new HashMap<>();
   private ClientSessionFactory artemisConnection;
 
+  private final ReentrantLock stateLock = new ReentrantLock();
+
   private boolean running = false;
   private boolean closed = false;
 
   public ActiveMQServer getArtemisServer() {
-    checkClosed();
     return artemisServer;
   }
 
   public void setArtemisServer(ActiveMQServer artemisServer) {
-    checkClosed();
-    this.artemisServer = artemisServer;
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      throwIfRunning();
+      this.artemisServer = artemisServer;
+    });
   }
 
   public ServerLocator getArtemisConnectionFactory() {
-    checkClosed();
     return artemisConnectionFactory;
   }
 
   public void setArtemisConnectionFactory(ServerLocator artemisConnectionFactory) {
-    checkClosed();
-    this.artemisConnectionFactory = artemisConnectionFactory;
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      throwIfRunning();
+      this.artemisConnectionFactory = artemisConnectionFactory;
+    });
   }
 
-  public KafkaClientFactory getKafkaClientFactory() {
-    checkClosed();
+  public ClientFactory getKafkaClientFactory() {
     return kafkaClientFactory;
   }
 
-  public void setKafkaClientFactory(KafkaClientFactory kafkaClientFactory) {
-    checkClosed();
-    this.kafkaClientFactory = kafkaClientFactory;
+  public void setKafkaClientFactory(ClientFactory kafkaClientFactory) {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      throwIfRunning();
+      this.kafkaClientFactory = kafkaClientFactory;
+    });
   }
 
   public Set<String> getArtemisOutboundAddresses() {
-    checkClosed();
-    return artemisOutboundAddresses;
+    return invokeStateChangingOperation(() -> {
+      if (closed || running) {
+        return Collections.unmodifiableSet(artemisOutboundAddresses);
+      }
+      return artemisOutboundAddresses;
+    });
   }
 
   public boolean isRunning() {
@@ -68,14 +84,38 @@ public class OutboundBridgeManager {
   public boolean isClosed() {
     return closed;
   }
-  
-  private void checkClosed() {
+
+  private void invokeStateChangingOperation(Runnable operation) {
+    try {
+      stateLock.lock();
+      operation.run();
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
+  private <T> T invokeStateChangingOperation(Supplier<T> operation) {
+    try {
+      stateLock.lock();
+      return operation.get();
+    } finally {
+      stateLock.unlock();
+    }
+  }
+
+  private void throwIfClosed() {
     if (closed) {
       throw new IllegalStateException("This outbound bridge manager is closed.");
     }
   }
 
-  private void checkState() {
+  private void throwIfRunning() {
+    if (running) {
+      throw new IllegalStateException("This outbound bridge manager is currently running.");
+    }
+  }
+
+  private void throwIfNotReady() {
     try {
       Objects.requireNonNull(artemisServer, "The artemisServer has not been set.");
       Objects.requireNonNull(artemisConnectionFactory, "The artemisConnectionFactory has not been set.");
@@ -85,30 +125,36 @@ public class OutboundBridgeManager {
     }
   }
 
-  private void initialize() {
-    try {
-      artemisConnection = artemisConnectionFactory.createSessionFactory();
-    } catch (Exception e) {
-      log.error("Unable to create connection to broker.");
-      log.debug("Stack trace:", e);
-      throw new RuntimeException(e);
-    }
+  private void initializeIfNecessary() {
+    throwIfNotReady();
 
+    if (artemisConnection == null || artemisConnection.isClosed()) {
+      try {
+        artemisConnection = artemisConnectionFactory.createSessionFactory();
+      } catch (Exception e) {
+        log.error("Unable to create connection to broker.");
+        log.debug("Stack trace:", e);
+        throw new RuntimeException(e);
+      }
+    }
     for (String artemisOutboundAddress : artemisOutboundAddresses) {
       OutboundBridge outboundBridge = outboundBridges.get(artemisOutboundAddress);
       if (outboundBridge == null) {
-        outboundBridge = new OutboundBridge(artemisOutboundAddress, artemisConnection, kafkaClientFactory.createKafkaProducer());
+        outboundBridge = new OutboundBridge(artemisOutboundAddress, artemisConnection, kafkaClientFactory);
         outboundBridges.put(artemisOutboundAddress, outboundBridge);
       }
     }
   }
 
-  public void start() {
-    checkClosed();
-    if (!running) {
-      checkState();
-      initialize();
+  public synchronized void start() {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      if (running) {
+        return;
+      }
+
       log.debug("Starting {} outbound bridges.", outboundBridges.size());
+      initializeIfNecessary();
       for (Map.Entry<String, OutboundBridge> outboundBridgesEntry : outboundBridges.entrySet()) {
         try {
           outboundBridgesEntry.getValue().start();
@@ -118,12 +164,16 @@ public class OutboundBridgeManager {
         }
       }
       running = true;
-    }
+    });
   }
 
-  public void stop() {
-    checkClosed();
-    if (running) {
+  public synchronized void stop() {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      if (!running) {
+        return;
+      }
+
       log.debug("Stopping {} outbound bridges.", outboundBridges.size());
       Set<String> outboundBridgesToRemove = new HashSet<>();
       for (Map.Entry<String, OutboundBridge> outboundBridgesEntry : outboundBridges.entrySet()) {
@@ -141,44 +191,44 @@ public class OutboundBridgeManager {
         outboundBridges.remove(outboundBridgeAddress);
       }
       running = false;
-    }
+    });
   }
 
-  public void restart() {
-    checkClosed();
-    stop();
-    start();
+  public synchronized void restart() {
+    invokeStateChangingOperation(() -> {
+      throwIfClosed();
+      stop();
+      start();
+    });
   }
 
-  public void close() {
-    stop();
-    log.debug("Closing {} outbound bridges.", outboundBridges.size());
-    try {
-      for (Map.Entry<String, OutboundBridge> outboundBridgesEntry : outboundBridges.entrySet()) {
+  public synchronized void close() {
+    invokeStateChangingOperation(() -> {
+      stop();
+      log.debug("Closing {} outbound bridges.", outboundBridges.size());
+      try {
+        for (Map.Entry<String, OutboundBridge> outboundBridgesEntry : outboundBridges.entrySet()) {
+          try {
+            outboundBridgesEntry.getValue().close();
+          } catch (Exception e) {
+            log.error("Unable to close outbound bridge for {}.", outboundBridgesEntry.getKey());
+            log.debug("Stack trace:", e);
+          }
+        }
+      } finally {
+        outboundBridges.clear();
+      }
+      if (artemisConnection != null) {
         try {
-          outboundBridgesEntry.getValue().close();
+          artemisConnection.close();
         } catch (Exception e) {
-          log.error("Unable to close outbound bridge for {}.", outboundBridgesEntry.getKey());
+          log.error("Unable to close artemis connection.");
           log.debug("Stack trace:", e);
+        } finally {
+          artemisConnection = null;
         }
       }
-    } finally {
-      outboundBridges.clear();
-    }
-    if (artemisConnection != null) {
-      try {
-        artemisConnection.close();
-      } catch (Exception e) {
-        log.error("Unable to close artemis connection.");
-        log.debug("Stack trace:", e);
-      } finally {
-        artemisConnection = null;
-      }
-    }
-    artemisConnectionFactory = null;
-    kafkaClientFactory = null;
-    artemisOutboundAddresses.clear();
-    artemisServer = null;
-    closed = true;
+      closed = true;
+    });
   }
 }
