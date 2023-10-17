@@ -30,6 +30,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   public static final String ARTEMIS_RETRY_INTERVAL_MULTIPLIER = "artemis.retry-interval-multiplier";
   public static final String ARTEMIS_MAX_RETRY_INTERVAL = "artemis.max-retry-interval";
   public static final String ARTEMIS_CALL_TIMEOUT = "artemis.call-timout";
+  public static final String ARTEMIS_PRODUCER_WINDOW_SIZE = "artemis.producer-window-size";
 
   public static final String DEFAULT_ARTEMIS_OUTBOUND_ADDRESSES = "__akb.outbound";
   public static final String DEFAULT_ARTEMIS_INBOUND_ADDRESS_SUFFIX = ".inbound";
@@ -39,6 +40,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   public static final String DEFAULT_ARTEMIS_RETRY_INTERVAL_MULTIPLIER = "1.5";
   public static final String DEFAULT_ARTEMIS_MAX_RETRY_INTERVAL = "30000";
   public static final String DEFAULT_ARTEMIS_CALL_TIMEOUT = "5000";
+  public static final String DEFAULT_ARTEMIS_PRODUCER_WINDOW_SIZE = "1";
 
   public static final String DEFAULT_ADDRESS_SPLIT_REGEX = "\\s*[,:;\\s]\\s*";
 
@@ -67,6 +69,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
     artemisConnectionFactory.setRetryInterval(Long.parseLong(properties.getOrDefault(ARTEMIS_RETRY_INTERVAL, DEFAULT_ARTEMIS_RETRY_INTERVAL)));
     artemisConnectionFactory.setRetryIntervalMultiplier(Double.parseDouble(properties.getOrDefault(ARTEMIS_RETRY_INTERVAL_MULTIPLIER, DEFAULT_ARTEMIS_RETRY_INTERVAL_MULTIPLIER)));
     artemisConnectionFactory.setMaxRetryInterval(Long.parseLong(properties.getOrDefault(ARTEMIS_MAX_RETRY_INTERVAL, DEFAULT_ARTEMIS_MAX_RETRY_INTERVAL)));
+    artemisConnectionFactory.setProducerWindowSize(Integer.parseInt(properties.getOrDefault(ARTEMIS_PRODUCER_WINDOW_SIZE, DEFAULT_ARTEMIS_PRODUCER_WINDOW_SIZE)));
   }
 
   protected void initKafkaClientFactory(Map<String, String> properties) {

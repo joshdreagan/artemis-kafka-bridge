@@ -145,6 +145,7 @@ public class OutboundBridge {
           String artemisMessageId = Objects.requireNonNull(artemisMessage.getStringProperty(ClientMessage.HDR_ORIG_MESSAGE_ID), String.format("The %s header must not be null.", ClientMessage.HDR_ORIG_MESSAGE_ID));
           String artemisDestinationName = Objects.requireNonNull(artemisMessage.getStringProperty(ClientMessage.HDR_ORIGINAL_ADDRESS), String.format("The %s header must not be null.", ClientMessage.HDR_ORIGINAL_ADDRESS));
           String artemisRoutingType = Objects.requireNonNull(artemisMessage.getStringProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE), String.format("The %s header must not be null.", ClientMessage.HDR_ORIG_ROUTING_TYPE));
+          String artemisGroupId = artemisMessage.getStringProperty(ClientMessage.HDR_GROUP_ID);
 
           byte[] kafkaMessageBody;
           if (artemisMessage.isLargeMessage()) {
@@ -159,7 +160,13 @@ public class OutboundBridge {
           kafkaMessage.headers().add(AkbHeaders.HDR_AKB_MESSAGE_ID, artemisMessageId.getBytes(StandardCharsets.UTF_8));
           kafkaMessage.headers().add(AkbHeaders.HDR_AKB_DESTINATION_NAME, artemisDestinationName.getBytes(StandardCharsets.UTF_8));
           kafkaMessage.headers().add(AkbHeaders.HDR_AKB_ROUTING_TYPE, artemisRoutingType.getBytes(StandardCharsets.UTF_8));
+          if (artemisGroupId != null && !artemisGroupId.isBlank()) {
+            kafkaMessage.headers().add(AkbHeaders.HDR_AKB_GROUP_ID, artemisGroupId.getBytes(StandardCharsets.UTF_8));
+          }
           kafkaProducer.send(kafkaMessage);
+          
+          artemisMessage.acknowledge();
+          artemisSession.commit();
         } catch (Exception e) {
           log.error("Unable to process message: {}", artemisMessage.getMessageID());
           log.debug("Stack trace:", e);

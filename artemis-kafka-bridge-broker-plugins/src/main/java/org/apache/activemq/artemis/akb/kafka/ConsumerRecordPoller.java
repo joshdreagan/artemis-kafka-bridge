@@ -64,10 +64,15 @@ public class ConsumerRecordPoller<K, V> {
       while (!stopRequested) {
         try {
           ConsumerRecords<K, V> consumerRecords = consumer.poll(Duration.ofMillis(5000L));
-          consumerRecords.forEach((consumerRecord) -> {
-            consumerRecordHandler.onConsumerRecord(consumerRecord);
-          });
-          consumer.commitSync();
+          log.debug("Polled a batch of {} kafka consumer records.", consumerRecords.count());
+          if (consumerRecords.count() == 0) {
+            Thread.sleep(1000L);
+          } else {
+            consumerRecords.forEach((consumerRecord) -> {
+              consumerRecordHandler.onConsumerRecord(consumerRecord);
+            });
+            consumer.commitSync();
+          }
         } catch (Exception e) {
           log.error("An error occurred polling/processing consumer records.");
           log.debug("Stack trace", e);

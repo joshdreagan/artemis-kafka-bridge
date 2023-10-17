@@ -193,9 +193,13 @@ public class InboundBridge {
             case AkbHeaders.HDR_AKB_ROUTING_TYPE -> {
               artemisMessage.putStringProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
             }
+            case AkbHeaders.HDR_AKB_GROUP_ID -> {
+              artemisMessage.putStringProperty(ClientMessage.HDR_GROUP_ID, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
+            }
           }
         }
         artemisProducer.send(artemisMessage);
+        log.debug("Inbound bridge processed message id: {}", artemisMessage.getStringProperty(ClientMessage.HDR_ORIG_MESSAGE_ID));
       } catch (Exception e) {
         log.error("Unable to process message: {}", consumerRecord);
       }

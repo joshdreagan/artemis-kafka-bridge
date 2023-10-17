@@ -201,8 +201,8 @@ public class InboundBridgeManager {
   private boolean addNewInboundBridge(String artemisAddress, boolean start) {
     boolean added = false;
     boolean shouldInclude = shouldInclude(artemisAddress);
-    log.debug("Address {} {} predicate.", artemisAddress, (shouldInclude) ? "matches" : "does not match");
     if (shouldInclude) {
+      log.debug("Address {} matches includes/excludes predicate. Inbound bridge will be created.", artemisAddress);
       InboundBridge inboundBridge = inboundBridges.get(artemisAddress);
       if (inboundBridge == null) {
         String kafkaAddress = artemisAddress.replaceAll("\\Q" + inboundAddressSuffix + "\\E$", "");

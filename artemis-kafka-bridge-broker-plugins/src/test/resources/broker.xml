@@ -20,6 +20,9 @@
     <address-settings>
       <address-setting match="app.*.inbound">
         <max-size-messages>5</max-size-messages>
+        <!--
+        <max-size-bytes>5</max-size-bytes>
+        -->
         <address-full-policy>BLOCK</address-full-policy>
       </address-setting>
     </address-settings>
