@@ -156,13 +156,15 @@ public class OutboundBridge {
             artemisMessageBody.readBytes(kafkaMessageBody);
           }
 
-          ProducerRecord kafkaMessage = new ProducerRecord(artemisDestinationName, kafkaMessageBody);
+          ProducerRecord kafkaMessage = null;
+          if (artemisGroupId != null && !artemisGroupId.isBlank()) {
+            kafkaMessage = new ProducerRecord(artemisDestinationName, artemisGroupId.getBytes(StandardCharsets.UTF_8), kafkaMessageBody);
+          } else {
+            kafkaMessage = new ProducerRecord(artemisDestinationName, kafkaMessageBody);
+          }
           kafkaMessage.headers().add(AkbHeaders.HDR_AKB_MESSAGE_ID, artemisMessageId.getBytes(StandardCharsets.UTF_8));
           kafkaMessage.headers().add(AkbHeaders.HDR_AKB_DESTINATION_NAME, artemisDestinationName.getBytes(StandardCharsets.UTF_8));
           kafkaMessage.headers().add(AkbHeaders.HDR_AKB_ROUTING_TYPE, artemisRoutingType.getBytes(StandardCharsets.UTF_8));
-          if (artemisGroupId != null && !artemisGroupId.isBlank()) {
-            kafkaMessage.headers().add(AkbHeaders.HDR_AKB_GROUP_ID, artemisGroupId.getBytes(StandardCharsets.UTF_8));
-          }
           kafkaProducer.send(kafkaMessage);
           
           artemisMessage.acknowledge();

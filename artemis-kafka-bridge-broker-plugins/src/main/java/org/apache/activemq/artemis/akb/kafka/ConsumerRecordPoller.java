@@ -1,6 +1,7 @@
 package org.apache.activemq.artemis.akb.kafka;
 
 import java.time.Duration;
+import java.util.Collection;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -13,7 +14,8 @@ public class ConsumerRecordPoller<K, V> {
 
   private static final Logger log = LoggerFactory.getLogger(ConsumerRecordPoller.class);
 
-  private final Consumer<K, V> consumer;
+  private final ClientFactory kafkaClientFactory;
+  private final Collection<String> topics;
   private final ConsumerRecordHandler<K, V> consumerRecordHandler;
 
   private ExecutorService poller;
@@ -23,13 +25,18 @@ public class ConsumerRecordPoller<K, V> {
 
   private boolean stopRequested = false;
 
-  public ConsumerRecordPoller(Consumer<K, V> consumer, ConsumerRecordHandler<K, V> consumerRecordHandler) {
-    this.consumer = Objects.requireNonNull(consumer, "The consumer parameter must not be null.");
+  public ConsumerRecordPoller(ClientFactory kafkaClientFactory, Collection<String> topics, ConsumerRecordHandler<K, V> consumerRecordHandler) {
+    this.kafkaClientFactory = Objects.requireNonNull(kafkaClientFactory, "The kafkaClientFactory parameter must not be null.");
+    this.topics = Objects.requireNonNull(topics, "The topics parameter must not be null.");
     this.consumerRecordHandler = Objects.requireNonNull(consumerRecordHandler, "The consumerRecordHandler parameter must not be null.");
   }
 
-  public Consumer<K, V> getConsumer() {
-    return consumer;
+  public ClientFactory getKafkaClientFactory() {
+    return kafkaClientFactory;
+  }
+
+  public Collection<String> getTopics() {
+    return topics;
   }
 
   public ConsumerRecordHandler<K, V> getConsumerRecordHandler() {
@@ -61,12 +68,16 @@ public class ConsumerRecordPoller<K, V> {
     }
     stopRequested = false;
     poller.submit(() -> {
+      Consumer consumer = consumer = kafkaClientFactory.createKafkaConsumer();
+      consumer.subscribe(topics);
       while (!stopRequested) {
         try {
           ConsumerRecords<K, V> consumerRecords = consumer.poll(Duration.ofMillis(5000L));
           log.debug("Polled a batch of {} kafka consumer records.", consumerRecords.count());
           if (consumerRecords.count() == 0) {
-            Thread.sleep(1000L);
+            if (!stopRequested) {
+              Thread.sleep(1000L);
+            }
           } else {
             consumerRecords.forEach((consumerRecord) -> {
               consumerRecordHandler.onConsumerRecord(consumerRecord);
@@ -77,6 +88,13 @@ public class ConsumerRecordPoller<K, V> {
           log.error("An error occurred polling/processing consumer records.");
           log.debug("Stack trace", e);
         }
+      }
+      try {
+        consumer.unsubscribe();
+        consumer.close();
+      } catch (Exception e) {
+        log.error("An error occurred closing kafka consumer.");
+        log.debug("Stack trace", e);
       }
     });
     running = true;

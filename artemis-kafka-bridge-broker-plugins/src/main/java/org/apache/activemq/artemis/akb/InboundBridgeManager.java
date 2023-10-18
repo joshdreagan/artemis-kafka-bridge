@@ -244,10 +244,13 @@ public class InboundBridgeManager {
 
       String artemisAddress = artemisConsumer.getQueueAddress().toString();
       Set<ServerConsumer> existingConsumers = artemisConsumers.get(artemisAddress);
+      if (existingConsumers != null) {
+        existingConsumers.remove(artemisConsumer);
+      }
       if (existingConsumers == null || existingConsumers.isEmpty()) {
         InboundBridge inboundBridge = inboundBridges.remove(artemisAddress);
         if (inboundBridge != null) {
-          inboundBridge.stop();
+          inboundBridge.close();
         }
         artemisConsumers.remove(artemisAddress);
       }

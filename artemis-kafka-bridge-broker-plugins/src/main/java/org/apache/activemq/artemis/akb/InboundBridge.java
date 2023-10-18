@@ -1,5 +1,6 @@
 package org.apache.activemq.artemis.akb;
 
+import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Objects;
@@ -11,7 +12,6 @@ import org.apache.activemq.artemis.api.core.client.ClientMessage;
 import org.apache.activemq.artemis.api.core.client.ClientProducer;
 import org.apache.activemq.artemis.api.core.client.ClientSession;
 import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
-import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
@@ -29,8 +29,7 @@ public class InboundBridge {
   private ClientSession artemisSession;
   private ClientProducer artemisProducer;
   private ConsumerRecordPoller kafkaConsumerRecordPoller;
-  private Consumer kafkaConsumer;
-  
+
   private boolean running = false;
   private boolean closed = false;
 
@@ -85,12 +84,8 @@ public class InboundBridge {
       }
       artemisSession.start();
 
-      if (kafkaConsumer == null) {
-        kafkaConsumer = kafkaClientFactory.createKafkaConsumer();
-      }
-      kafkaConsumer.subscribe(Collections.singleton(kafkaInboundAddress));
       if (kafkaConsumerRecordPoller == null) {
-        kafkaConsumerRecordPoller = new ConsumerRecordPoller<>(kafkaConsumer, new InboundConsumerRecordHandler());
+        kafkaConsumerRecordPoller = new ConsumerRecordPoller<>(kafkaClientFactory, Collections.singleton(kafkaInboundAddress), new InboundConsumerRecordHandler());
       }
       kafkaConsumerRecordPoller.start();
       running = true;
@@ -112,14 +107,6 @@ public class InboundBridge {
         kafkaConsumerRecordPoller.stop();
       } catch (Exception e) {
         log.error("Unable to stop kafka consumer record poller.");
-        throw new RuntimeException(e);
-      }
-    }
-    if (kafkaConsumer != null) {
-      try {
-        kafkaConsumer.unsubscribe();
-      } catch (Exception e) {
-        log.error("Unable to unsubscribe kafka consumer.");
         throw new RuntimeException(e);
       }
     }
@@ -150,14 +137,6 @@ public class InboundBridge {
         log.debug("Stack trace:", e);
       }
     }
-    if (kafkaConsumer != null) {
-      try {
-        kafkaConsumer.close();
-      } catch (Exception e) {
-        log.error("Unable to close kafka consumer.");
-        log.debug("Stack trace:", e);
-      }
-    }
     if (artemisSession != null) {
       try {
         artemisSession.close();
@@ -178,8 +157,13 @@ public class InboundBridge {
       try {
         ClientMessage artemisMessage = artemisSession.createMessage(true);
         String kafkaTopic = consumerRecord.topic();
+        byte[] kafkaKey = consumerRecord.key();
+        if (kafkaKey != null) {
+          artemisMessage.putStringProperty(ClientMessage.HDR_GROUP_ID, new String(kafkaKey, StandardCharsets.UTF_8));
+        }
         byte[] kafkaBody = consumerRecord.value();
-        artemisMessage.getBodyBuffer().writeBytes(kafkaBody);
+        //artemisMessage.writeBodyBufferBytes(kafkaBody);
+        artemisMessage.getBuffer().writeBytes(kafkaBody);
         for (Header header : consumerRecord.headers()) {
           String kafkaHeaderName = header.key();
           byte[] kafkaHeaderValue = header.value();
@@ -192,9 +176,6 @@ public class InboundBridge {
             }
             case AkbHeaders.HDR_AKB_ROUTING_TYPE -> {
               artemisMessage.putStringProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
-            }
-            case AkbHeaders.HDR_AKB_GROUP_ID -> {
-              artemisMessage.putStringProperty(ClientMessage.HDR_GROUP_ID, new String(kafkaHeaderValue, StandardCharsets.UTF_8));
             }
           }
         }

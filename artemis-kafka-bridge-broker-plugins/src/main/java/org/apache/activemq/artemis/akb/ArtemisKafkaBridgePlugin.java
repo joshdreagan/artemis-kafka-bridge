@@ -1,8 +1,15 @@
 package org.apache.activemq.artemis.akb;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import org.apache.activemq.artemis.akb.kafka.DefaultClientFactory;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
@@ -31,6 +38,8 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   public static final String ARTEMIS_MAX_RETRY_INTERVAL = "artemis.max-retry-interval";
   public static final String ARTEMIS_CALL_TIMEOUT = "artemis.call-timout";
   public static final String ARTEMIS_PRODUCER_WINDOW_SIZE = "artemis.producer-window-size";
+
+  public static final String KAFKA_CLIENT_PROPERTIES_FILE = "kafka.client-properties-file";
 
   public static final String DEFAULT_ARTEMIS_OUTBOUND_ADDRESSES = "__akb.outbound";
   public static final String DEFAULT_ARTEMIS_INBOUND_ADDRESS_SUFFIX = ".inbound";
@@ -75,7 +84,45 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   protected void initKafkaClientFactory(Map<String, String> properties) {
     kafkaClientFactory = new DefaultClientFactory();
 
-    // TODO
+    Properties allProperties = new Properties();
+    try {
+      allProperties.load(ArtemisKafkaBridgePlugin.class.getResourceAsStream("/kafka-client.properties"));
+      String kafkaClientPropertiesFile = properties.get(KAFKA_CLIENT_PROPERTIES_FILE);
+      if (kafkaClientPropertiesFile != null && !kafkaClientPropertiesFile.isBlank() && Files.exists(Paths.get(kafkaClientPropertiesFile))) {
+        try (FileInputStream propertiesFis = new FileInputStream(new File(kafkaClientPropertiesFile));) {
+          allProperties.load(propertiesFis);
+        }
+      }
+    } catch (IOException e) {
+      throw new RuntimeException("Unable to initialize plugin.", e);
+    }
+    for (Map.Entry<String, String> property : properties.entrySet()) {
+      String key = property.getKey();
+      String value = property.getValue();
+      if (key.startsWith("kafka.")) {
+        key = key.substring("kafka.".length());
+        allProperties.put(key, value);
+      }
+    }
+
+    Map<String, String> commonProperties = ((DefaultClientFactory) kafkaClientFactory).getCommonProperties();
+    Map<String, String> producerProperties = ((DefaultClientFactory) kafkaClientFactory).getProducerProperties();
+    Map<String, String> consumerProperties = ((DefaultClientFactory) kafkaClientFactory).getConsumerProperties();
+    for (String key : allProperties.stringPropertyNames()) {
+      String value = allProperties.getProperty(key);
+      if (key.startsWith("producer.")) {
+        key = key.substring("producer.".length());
+        producerProperties.put(key, value);
+        log.debug("Added kafka producer client property [{}={}].", key, value);
+      } else if (key.startsWith("consumer.")) {
+        key = key.substring("consumer.".length());
+        consumerProperties.put(key, value);
+        log.debug("Added kafka consumer client property [{}={}].", key, value);
+      } else {
+        commonProperties.put(key, value);
+        log.debug("Added kafka common client property [{}={}].", key, value);
+      }
+    }
   }
 
   protected void initOutboundBridgeManager(Map<String, String> properties) {
@@ -87,7 +134,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
 
   protected void initInboundBridgeManager(Map<String, String> properties) {
     inboundBridgeManager = new InboundBridgeManager();
-    
+
     String artemisInboundAddressSuffix = properties.getOrDefault(ARTEMIS_INBOUND_ADDRESS_SUFFIX, DEFAULT_ARTEMIS_INBOUND_ADDRESS_SUFFIX);
     inboundBridgeManager.setInboundAddressSuffix(artemisInboundAddressSuffix);
 
