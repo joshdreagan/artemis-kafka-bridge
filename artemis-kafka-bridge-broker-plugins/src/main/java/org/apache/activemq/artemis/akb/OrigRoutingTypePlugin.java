@@ -38,8 +38,8 @@ public class OrigRoutingTypePlugin implements ActiveMQServerPlugin {
     AddressInfo originalAddressInfo = session.getAddress(originalAddress);
     RoutingType originalRoutingType = originalAddressInfo.getRoutingType();
     if (originalRoutingType != null) {
-      log.debug("Adding {}={} header to message {}.", Message.HDR_ORIG_ROUTING_TYPE, originalRoutingType.name(), message.getMessageID());
-      message.putStringProperty(Message.HDR_ORIG_ROUTING_TYPE, originalRoutingType.name());
+      log.debug("Adding {}={} header to message {}.", Message.HDR_ORIG_ROUTING_TYPE, originalRoutingType.getType(), message.getMessageID());
+      message.putByteProperty(Message.HDR_ORIG_ROUTING_TYPE, originalRoutingType.getType());
       message.reencode();
     }
   }

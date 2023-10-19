@@ -8,24 +8,24 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
-import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
-import org.apache.activemq.artemis.api.core.client.ServerLocator;
+import javax.jms.Connection;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.activemq.artemis.akb.kafka.ClientFactory;
+import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 
 public class OutboundBridgeManager {
 
   private static final Logger log = LoggerFactory.getLogger(OutboundBridgeManager.class);
 
   private ActiveMQServer artemisServer;
-  private ServerLocator artemisConnectionFactory;
+  private ActiveMQConnectionFactory artemisConnectionFactory;
   private ClientFactory kafkaClientFactory;
   private final Set<String> artemisOutboundAddresses = new HashSet<>();
 
   private final Map<String, OutboundBridge> outboundBridges = new HashMap<>();
-  private ClientSessionFactory artemisConnection;
+  private Connection artemisConnection;
 
   private final ReentrantLock stateLock = new ReentrantLock();
 
@@ -44,11 +44,11 @@ public class OutboundBridgeManager {
     });
   }
 
-  public ServerLocator getArtemisConnectionFactory() {
+  public ActiveMQConnectionFactory getArtemisConnectionFactory() {
     return artemisConnectionFactory;
   }
 
-  public void setArtemisConnectionFactory(ServerLocator artemisConnectionFactory) {
+  public void setArtemisConnectionFactory(ActiveMQConnectionFactory artemisConnectionFactory) {
     invokeStateChangingOperation(() -> {
       throwIfClosed();
       throwIfRunning();
@@ -128,9 +128,10 @@ public class OutboundBridgeManager {
   private void initializeIfNecessary() {
     throwIfNotReady();
 
-    if (artemisConnection == null || artemisConnection.isClosed()) {
+    if (artemisConnection == null) {
       try {
-        artemisConnection = artemisConnectionFactory.createSessionFactory();
+        artemisConnection = artemisConnectionFactory.createConnection();
+        artemisConnection.start();
       } catch (Exception e) {
         log.error("Unable to create connection to broker.");
         log.debug("Stack trace:", e);
@@ -220,6 +221,7 @@ public class OutboundBridgeManager {
       }
       if (artemisConnection != null) {
         try {
+          artemisConnection.stop();
           artemisConnection.close();
         } catch (Exception e) {
           log.error("Unable to close artemis connection.");

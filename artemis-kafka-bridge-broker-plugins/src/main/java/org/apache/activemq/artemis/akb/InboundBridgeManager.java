@@ -9,21 +9,21 @@ import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
-import org.apache.activemq.artemis.api.core.client.ServerLocator;
+import javax.jms.Connection;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.apache.activemq.artemis.core.server.ServerConsumer;
 import org.apache.activemq.artemis.core.settings.impl.Match;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.activemq.artemis.akb.kafka.ClientFactory;
+import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 
 public class InboundBridgeManager {
 
   private static final Logger log = LoggerFactory.getLogger(InboundBridgeManager.class);
 
   private ActiveMQServer artemisServer;
-  private ServerLocator artemisConnectionFactory;
+  private ActiveMQConnectionFactory artemisConnectionFactory;
   private ClientFactory kafkaClientFactory;
   private String inboundAddressSuffix;
   private final Set<String> artemisInboundAddressIncludes = new HashSet<>();
@@ -33,7 +33,7 @@ public class InboundBridgeManager {
   private Predicate<String> artemisAddressExcludesPredicate;
   private final Map<String, Set<ServerConsumer>> artemisConsumers = new HashMap<>();
   private final Map<String, InboundBridge> inboundBridges = new HashMap<>();
-  private ClientSessionFactory artemisConnection;
+  private Connection artemisConnection;
 
   private final ReentrantLock stateLock = new ReentrantLock();
 
@@ -52,11 +52,11 @@ public class InboundBridgeManager {
     });
   }
 
-  public ServerLocator getArtemisConnectionFactory() {
+  public ActiveMQConnectionFactory getArtemisConnectionFactory() {
     return artemisConnectionFactory;
   }
 
-  public void setArtemisConnectionFactory(ServerLocator artemisConnectionFactory) {
+  public void setArtemisConnectionFactory(ActiveMQConnectionFactory artemisConnectionFactory) {
     invokeStateChangingOperation(() -> {
       throwIfClosed();
       throwIfRunning();
@@ -169,9 +169,10 @@ public class InboundBridgeManager {
       artemisAddressExcludesPredicate = (artemisAddressExcludesPredicate == null) ? predicate : artemisAddressExcludesPredicate.or(predicate);
     }
 
-    if (artemisConnection == null || artemisConnection.isClosed()) {
+    if (artemisConnection == null) {
       try {
-        artemisConnection = artemisConnectionFactory.createSessionFactory();
+        artemisConnection = artemisConnectionFactory.createConnection();
+        artemisConnection.start();
       } catch (Exception e) {
         log.error("Unable to create connection to broker.");
         log.debug("Stack trace:", e);
@@ -202,9 +203,10 @@ public class InboundBridgeManager {
     boolean added = false;
     boolean shouldInclude = shouldInclude(artemisAddress);
     if (shouldInclude) {
-      log.debug("Address {} matches includes/excludes predicate. Inbound bridge will be created.", artemisAddress);
+      log.debug("Address {} matches includes/excludes predicate.", artemisAddress);
       InboundBridge inboundBridge = inboundBridges.get(artemisAddress);
       if (inboundBridge == null) {
+        log.debug("Inbound bridge does not yet exist for address {}. One will be created.", artemisAddress);
         String kafkaAddress = artemisAddress.replaceAll("\\Q" + inboundAddressSuffix + "\\E$", "");
         inboundBridge = new InboundBridge(artemisAddress, artemisConnection, kafkaAddress, kafkaClientFactory);
         if (start) {
@@ -248,6 +250,7 @@ public class InboundBridgeManager {
         existingConsumers.remove(artemisConsumer);
       }
       if (existingConsumers == null || existingConsumers.isEmpty()) {
+        log.debug("The last consumer for address {} has been removed. Inbound bridge will be closed.", artemisAddress);
         InboundBridge inboundBridge = inboundBridges.remove(artemisAddress);
         if (inboundBridge != null) {
           inboundBridge.close();
@@ -334,6 +337,7 @@ public class InboundBridgeManager {
       artemisConsumers.clear();
       if (artemisConnection != null) {
         try {
+          artemisConnection.stop();
           artemisConnection.close();
         } catch (Exception e) {
           log.error("Unable to close artemis connection.");

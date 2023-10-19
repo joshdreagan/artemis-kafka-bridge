@@ -7,14 +7,11 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import org.apache.activemq.artemis.akb.kafka.DefaultClientFactory;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
-import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
-import org.apache.activemq.artemis.api.core.client.ServerLocator;
 import org.apache.activemq.artemis.core.remoting.impl.invm.InVMConnectorFactory;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.apache.activemq.artemis.core.server.ServerConsumer;
@@ -22,6 +19,9 @@ import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerPlugin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.activemq.artemis.akb.kafka.ClientFactory;
+import org.apache.activemq.artemis.api.jms.ActiveMQJMSClient;
+import org.apache.activemq.artemis.api.jms.JMSFactoryType;
+import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 
 public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
 
@@ -53,7 +53,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
 
   public static final String DEFAULT_ADDRESS_SPLIT_REGEX = "\\s*[,:;\\s]\\s*";
 
-  protected ServerLocator artemisConnectionFactory;
+  protected ActiveMQConnectionFactory artemisConnectionFactory;
   protected ClientFactory kafkaClientFactory;
   protected OutboundBridgeManager outboundBridgeManager;
   protected InboundBridgeManager inboundBridgeManager;
@@ -70,7 +70,7 @@ public class ArtemisKafkaBridgePlugin implements ActiveMQServerPlugin {
   }
 
   protected void initArtemisConnectionFactory(Map<String, String> properties) {
-    artemisConnectionFactory = ActiveMQClient.createServerLocatorWithoutHA(new TransportConfiguration(InVMConnectorFactory.class.getName()));
+    artemisConnectionFactory = ActiveMQJMSClient.createConnectionFactoryWithHA(JMSFactoryType.CF, new TransportConfiguration(InVMConnectorFactory.class.getName()));
 
     artemisConnectionFactory.setCallTimeout(Long.parseLong(properties.getOrDefault(ARTEMIS_CALL_TIMEOUT, DEFAULT_ARTEMIS_CALL_TIMEOUT)));
     artemisConnectionFactory.setInitialConnectAttempts(Integer.parseInt(properties.getOrDefault(ARTEMIS_INITIAL_CONNECT_ATTEMPTS, DEFAULT_ARTEMIS_INITIAL_CONNECT_ATTEMPTS)));

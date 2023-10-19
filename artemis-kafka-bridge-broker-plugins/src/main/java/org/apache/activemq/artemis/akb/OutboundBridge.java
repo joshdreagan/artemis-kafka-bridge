@@ -2,14 +2,15 @@ package org.apache.activemq.artemis.akb;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import javax.jms.Connection;
+import javax.jms.JMSException;
+import javax.jms.Message;
+import javax.jms.MessageConsumer;
+import javax.jms.MessageListener;
+import javax.jms.Session;
 import org.apache.activemq.artemis.akb.kafka.ClientFactory;
-import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
-import org.apache.activemq.artemis.api.core.ActiveMQException;
-import org.apache.activemq.artemis.api.core.client.ClientConsumer;
+import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.client.ClientMessage;
-import org.apache.activemq.artemis.api.core.client.ClientSession;
-import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
-import org.apache.activemq.artemis.api.core.client.MessageHandler;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
@@ -20,16 +21,17 @@ public class OutboundBridge {
   private static final Logger log = LoggerFactory.getLogger(OutboundBridge.class);
 
   private final String artemisOutboundAddress;
-  private final ClientSessionFactory artemisConnection;
+  private final Connection artemisConnection;
   private final ClientFactory kafkaClientFactory;
 
-  private ClientSession artemisSession;
+  private Session artemisSession;
+  private MessageConsumer artemisConsumer;
   private Producer kafkaProducer;
 
   private boolean running = false;
   private boolean closed = false;
 
-  public OutboundBridge(String artemisOutboundAddress, ClientSessionFactory artemisConnection, ClientFactory kafkaClientFactory) {
+  public OutboundBridge(String artemisOutboundAddress, Connection artemisConnection, ClientFactory kafkaClientFactory) {
     this.artemisOutboundAddress = Objects.requireNonNull(artemisOutboundAddress, "The artemisOutboundAddress parameter must not be null.");
     this.artemisConnection = Objects.requireNonNull(artemisConnection, "The artemisConnection parameter must not be null.");
     this.kafkaClientFactory = Objects.requireNonNull(kafkaClientFactory, "The kafkaClientFactory parameter must not be null.");
@@ -39,7 +41,7 @@ public class OutboundBridge {
     return artemisOutboundAddress;
   }
 
-  public ClientSessionFactory getArtemisConnection() {
+  public Connection getArtemisConnection() {
     return artemisConnection;
   }
 
@@ -72,16 +74,15 @@ public class OutboundBridge {
       if (kafkaProducer == null) {
         kafkaProducer = kafkaClientFactory.createKafkaProducer();
       }
-      if (artemisSession == null || artemisSession.isClosed()) {
-        artemisSession = artemisConnection.createSession();
+      if (artemisSession == null) {
+        artemisSession = artemisConnection.createSession(false, Session.CLIENT_ACKNOWLEDGE);
 
-        ClientConsumer artemisConsumer = artemisSession.createConsumer(artemisOutboundAddress);
-        artemisConsumer.setMessageHandler(new OutboundMessageHandler());
+        artemisConsumer = artemisSession.createConsumer(artemisSession.createQueue(artemisOutboundAddress));
+        artemisConsumer.setMessageListener(new OutboundMessageHandler());
       }
-      artemisSession.start();
-      
+
       running = true;
-    } catch (ActiveMQException e) {
+    } catch (JMSException e) {
       log.error("Unable to start the outbound bridge: {}", artemisOutboundAddress);
       throw new RuntimeException(e);
     }
@@ -96,10 +97,14 @@ public class OutboundBridge {
     log.debug("Stopping outbound bridge: {}", artemisOutboundAddress);
     if (artemisSession != null) {
       try {
-        artemisSession.stop();
-      } catch (ActiveMQException e) {
+        artemisConsumer.close();
+        artemisSession.close();
+      } catch (JMSException e) {
         log.error("Unable to stop artemis session.");
         throw new RuntimeException(e);
+      } finally {
+        artemisConsumer = null;
+        artemisSession = null;
       }
     }
     running = false;
@@ -113,16 +118,6 @@ public class OutboundBridge {
 
   public void close() {
     stop();
-    if (artemisSession != null) {
-      try {
-        artemisSession.close();
-      } catch (ActiveMQException e) {
-        log.error("Unable to close artemis session.");
-        log.debug("Stack trace:", e);
-      } finally {
-        artemisSession = null;
-      }
-    }
     if (kafkaProducer != null) {
       try {
         kafkaProducer.close();
@@ -136,24 +131,29 @@ public class OutboundBridge {
     closed = true;
   }
 
-  private class OutboundMessageHandler implements MessageHandler {
+  private class OutboundMessageHandler implements MessageListener {
 
     @Override
-    public void onMessage(ClientMessage artemisMessage) {
+    public void onMessage(Message artemisMessage) {
       if (artemisMessage != null) {
+        String artemisJmsMessageId = null;
         try {
-          String artemisMessageId = Objects.requireNonNull(artemisMessage.getStringProperty(ClientMessage.HDR_ORIG_MESSAGE_ID), String.format("The %s header must not be null.", ClientMessage.HDR_ORIG_MESSAGE_ID));
-          String artemisDestinationName = Objects.requireNonNull(artemisMessage.getStringProperty(ClientMessage.HDR_ORIGINAL_ADDRESS), String.format("The %s header must not be null.", ClientMessage.HDR_ORIGINAL_ADDRESS));
-          String artemisRoutingType = Objects.requireNonNull(artemisMessage.getStringProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE), String.format("The %s header must not be null.", ClientMessage.HDR_ORIG_ROUTING_TYPE));
-          String artemisGroupId = artemisMessage.getStringProperty(ClientMessage.HDR_GROUP_ID);
+          artemisJmsMessageId = artemisMessage.getJMSMessageID();
 
-          byte[] kafkaMessageBody;
-          if (artemisMessage.isLargeMessage()) {
-            throw new RuntimeException("Unable to handle large messages at this time.");
-          } else {
-            ActiveMQBuffer artemisMessageBody = artemisMessage.getReadOnlyBodyBuffer();
-            kafkaMessageBody = new byte[artemisMessageBody.readableBytes()];
-            artemisMessageBody.readBytes(kafkaMessageBody);
+          String artemisMessageId = Objects.requireNonNull(artemisMessage.getStringProperty(ClientMessage.HDR_ORIG_MESSAGE_ID.toString()), String.format("The %s header must not be null.", ClientMessage.HDR_ORIG_MESSAGE_ID));
+          AkbMessageType artemisMessageType = AkbMessageType.fromJmsMessage(artemisMessage);
+          String artemisDestinationName = Objects.requireNonNull(artemisMessage.getStringProperty(ClientMessage.HDR_ORIGINAL_ADDRESS.toString()), String.format("The %s header must not be null.", ClientMessage.HDR_ORIGINAL_ADDRESS));
+          RoutingType artemisRoutingType = RoutingType.getType(artemisMessage.getByteProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE.toString()));
+          String artemisGroupId = artemisMessage.getStringProperty(ClientMessage.HDR_GROUP_ID.toString());
+
+          byte[] kafkaMessageBody = new byte[0];
+          switch (artemisMessageType) {
+            case TEXT -> {
+              kafkaMessageBody = artemisMessage.getBody(String.class).getBytes(StandardCharsets.UTF_8);
+            }
+            case BYTES -> {
+              kafkaMessageBody = artemisMessage.getBody(byte[].class);
+            }
           }
 
           ProducerRecord kafkaMessage = null;
@@ -163,14 +163,14 @@ public class OutboundBridge {
             kafkaMessage = new ProducerRecord(artemisDestinationName, kafkaMessageBody);
           }
           kafkaMessage.headers().add(AkbHeaders.HDR_AKB_MESSAGE_ID, artemisMessageId.getBytes(StandardCharsets.UTF_8));
+          kafkaMessage.headers().add(AkbHeaders.HDR_AKB_MESSAGE_TYPE, artemisMessageType.name().getBytes(StandardCharsets.UTF_8));
           kafkaMessage.headers().add(AkbHeaders.HDR_AKB_DESTINATION_NAME, artemisDestinationName.getBytes(StandardCharsets.UTF_8));
-          kafkaMessage.headers().add(AkbHeaders.HDR_AKB_ROUTING_TYPE, artemisRoutingType.getBytes(StandardCharsets.UTF_8));
+          kafkaMessage.headers().add(AkbHeaders.HDR_AKB_ROUTING_TYPE, artemisRoutingType.name().getBytes(StandardCharsets.UTF_8));
           kafkaProducer.send(kafkaMessage);
-          
+
           artemisMessage.acknowledge();
-          artemisSession.commit();
         } catch (Exception e) {
-          log.error("Unable to process message: {}", artemisMessage.getMessageID());
+          log.error("Unable to process message: {}", artemisJmsMessageId);
           log.debug("Stack trace:", e);
         }
       } else {

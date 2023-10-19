@@ -10,7 +10,7 @@ public class DefaultClientFactory implements ClientFactory<KafkaProducer, KafkaC
   private final Map<String, String> commonProperties = new HashMap<>();
   private final Map<String, String> producerProperties = new HashMap<>();
   private final Map<String, String> consumerProperties = new HashMap<>();
-  
+
   public DefaultClientFactory() {
   }
 
