@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.Objects;
 import javax.jms.BytesMessage;
 import javax.jms.Connection;
+import javax.jms.Destination;
 import javax.jms.JMSException;
 import javax.jms.Message;
 import javax.jms.MessageProducer;
@@ -18,6 +19,8 @@ import org.apache.activemq.artemis.api.core.client.ClientMessage;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static org.apache.activemq.artemis.api.core.RoutingType.MULTICAST;
 
 public class InboundBridge {
 
@@ -82,7 +85,7 @@ public class InboundBridge {
     try {
       if (artemisSession == null) {
         artemisSession = artemisConnection.createSession();
-        artemisProducer = artemisSession.createProducer(artemisSession.createQueue(artemisInboundAddress));
+        artemisProducer = artemisSession.createProducer(null);
       }
 
       if (kafkaConsumerRecordPoller == null) {
@@ -176,7 +179,16 @@ public class InboundBridge {
         artemisMessage.setStringProperty(ClientMessage.HDR_ORIGINAL_ADDRESS.toString(), artemisDestinationName);
         artemisMessage.setStringProperty(ClientMessage.HDR_ORIG_ROUTING_TYPE.toString(), artemisRoutingType.name());
         artemisMessage.setStringProperty(ClientMessage.HDR_GROUP_ID.toString(), artemisGroupId);
-        artemisProducer.send(artemisMessage);
+        Destination destination = null;
+        switch (artemisRoutingType) {
+          case MULTICAST:
+            destination = artemisSession.createTopic(artemisInboundAddress);
+            break;
+          case ANYCAST:
+          default:
+            destination = artemisSession.createQueue(artemisInboundAddress);
+        }
+        artemisProducer.send(destination, artemisMessage);
         log.debug("Inbound bridge processed message id: {}", artemisMessageId);
       } catch (Exception e) {
         log.error("Unable to process message: {}", consumerRecord);
